@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+# (simple) queue system for bash
+# executes ONE job at a time
+# waits for job to finish (busy-wait by 5sec), then starts next
+
+# do i want pidfile?
+PIDFILE=/tmp/jobq.pid
+
+# the currently-running job (shell cmd)
+CURRENT=/tmp/jobq.current
+QUEUEFILE=/tmp/jobq.
+
+# would be cool if this were a socket and _execute sent cmd to it on completion
+LISTENFILE=/tmp/jobq.listen
+
+INTERVAL=5
+
+# generate the name of a related filehandle for the command to be saved in:
+# old, out, or err
+_namefile () { echo "/tmp/jobq.$1.$(echo -n $@|md5sum|sed 's/ .*//')"; }
+
+# echo name of the next queuefile to use (increment filename by 1)
+_next_queuefile () {
+    i=1
+    while :; do
+        if [[ ! -f ${QUEUEFILE}$i ]]; then
+            echo ${QUEUEFILE}$i
+            return 0
+        fi
+        i=$((i+1))
+    done
+}
+
+# shuffle q3 -> q2, q2 -> q1, etc
+# remote q1 first (ie empty queue if there's only one job in it)
+_shuffle_down_queue () {
+    rm -f "${QUEUEFILE}1"
+    i=2
+    while :; do
+        if [[ ! -f ${QUEUEFILE}$i ]]; then
+            break
+        else
+            j=$((i-1))
+            mv ${QUEUEFILE}$i ${QUEUEFILE}$j
+        fi
+        i=$((i+1))
+    done
+}
+
+# busy-wait for $PIDFILE to disappear
+_listen () {
+    touch $LISTENFILE
+
+    while :; do
+        if [[ -f $PIDFILE ]]; then
+            sleep $INTERVAL
+        else
+            # stop listening on empty queue
+            [[ ! -f "${QUEUEFILE}1" ]] && break
+
+            # there's definitely a race condition here
+            # can you even do locks in bash lol
+            cmd_to_run=$(cat "${QUEUEFILE}1")
+            _shuffle_down_queue
+
+            _execute "${cmd_to_run[@]}" &
+        fi
+    done
+
+    # done listening (no more jobs in queue?)
+    rm $LISTENFILE
+}
+
+# execute the given command
+# sets up logfiles, pidfile, and file holding current command
+# removes pidfile and current command file when done
+_execute () {
+    logger "Executing:"
+    logger "$@"
+    echo "$@" > $CURRENT
+
+    stdout=$(_namefile 'out' "$@")
+    stderr=$(_namefile 'err' "$@")
+
+    # have to eval to avoid weird interpretations of arguments
+    # (see IFS resetting near end of script)
+    set -x
+    (eval "$@") > $stdout 2>$stderr &
+    set +x
+    PID=$!
+
+    # execute handles it own cleanup
+    echo $PID > $PIDFILE
+    wait
+    mv $CURRENT $(_namefile 'old')
+    rm $PIDFILE
+}
+
+# If there's nothing on the queue, immediately run the function
+# Otherwise, append it to the queue (and start listening)
+_queue () {
+
+    if [[ ! -f $PIDFILE ]]; then
+        _execute "$@" &
+    else
+        echo "$@" >> $(_next_queuefile)
+
+        [[ ! -e $LISTENFILE ]] && _listen &
+    fi
+}
+
+
+# change IFS to avoid parsing inputs
+
+oIFS=$IFS
+IFS='::::'
+
+# change to _queue once _listen works
+_queue "$@" &
+
+IFS=$oIFS
