@@ -22,13 +22,13 @@ _namefile () { echo "/tmp/jobq.$1.$(echo -n $@|md5sum|sed 's/ .*//')"; }
 
 # echo name of the next queuefile to use (increment filename by 1)
 _next_queuefile () {
-    i=1
+    local i=1
     while :; do
         if [[ ! -f ${QUEUEFILE}$i ]]; then
             echo ${QUEUEFILE}$i
             return 0
         fi
-        i=$((i+1))
+        i=$((i++))
     done
 }
 
@@ -36,7 +36,7 @@ _next_queuefile () {
 # remote q1 first (ie empty queue if there's only one job in it)
 _shuffle_down_queue () {
     rm -f "${QUEUEFILE}1"
-    i=2
+    local i=2
     while :; do
         if [[ ! -f ${QUEUEFILE}$i ]]; then
             break
@@ -61,7 +61,7 @@ _listen () {
 
             # there's definitely a race condition here
             # can you even do locks in bash lol
-            cmd_to_run=$(cat "${QUEUEFILE}1")
+            local cmd_to_run=$(cat "${QUEUEFILE}1")
             _shuffle_down_queue
 
             _execute "${cmd_to_run[@]}" &
@@ -80,8 +80,8 @@ _execute () {
     logger "$@"
     echo "$@" > $CURRENT
 
-    stdout=$(_namefile 'out' "$@")
-    stderr=$(_namefile 'err' "$@")
+    local stdout=$(_namefile 'out' "$@")
+    local stderr=$(_namefile 'err' "$@")
 
     # have to eval to avoid weird interpretations of arguments
     # (see IFS resetting near end of script)
